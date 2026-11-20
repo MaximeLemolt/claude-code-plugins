@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Line } from '../types'
 import {
   COLORS, DEFAULT_DROP_ORDER, contextBar, contextColor, fitRow, formatTokens, modelLabel,
-  readDisplay, readDropOrder, rowWidth, savedEffortFor,
+  normalizeDropOrder, readDisplay, readSeparator, readDropOrder, rowWidth, savedEffortFor,
 } from '../hooks/row'
 import type { Part, Texts } from '../hooks/row'
 
@@ -11,91 +11,151 @@ import type { Part, Texts } from '../hooks/row'
 const TEXTS: Texts = {
   model: 'Opus 5.5',
   effort: 'high',
-  branch: 'feature/long-branch-name',
-  bar: 'bar',
-  percent: '42%',
-  tokens: '84k/200k',
+  'git-branch': 'feature/long-branch-name',
+  'ctx-label': 'context',
+  'ctx-bar': 'bar',
+  'ctx-percent': '42%',
+  'ctx-tokens': '84k/200k',
   cost: '$1.23',
 }
-const ALL = new Set<Part>(['model', 'effort', 'branch', 'bar', 'percent', 'tokens', 'cost'])
+const ALL = new Set<Part>(['model', 'effort', 'git-branch', 'ctx-label', 'ctx-bar', 'ctx-percent', 'ctx-tokens', 'cost'])
 
 const sorted = (parts: Set<Part>) => [...parts].sort()
 
 test('the row width counts every part and separator', async () => {
   expect(rowWidth(TEXTS, ALL)).toBe(86)
-  expect(rowWidth(TEXTS, new Set<Part>(['model', 'percent']))).toBe('Opus 5.5 | context 42%'.length)
+  expect(rowWidth(TEXTS, new Set<Part>(['model', 'ctx-label', 'ctx-percent']))).toBe('Opus 5.5 | context 42%'.length)
   // Effort and tokens only count beside the model and the context.
-  expect(rowWidth(TEXTS, new Set<Part>(['effort', 'tokens', 'cost']))).toBe(5)
+  expect(rowWidth(TEXTS, new Set<Part>(['effort', 'ctx-tokens', 'cost']))).toBe(5)
+})
+
+test('the separator sets the room between the parts', async () => {
+  // Three separators: "•" takes as much room as "|", "<->" two more cells each.
+  expect(rowWidth(TEXTS, ALL, '•')).toBe(86)
+  expect(rowWidth(TEXTS, ALL, '<->')).toBe(86 + 6)
+  // The longer separator makes the row too wide for 86 columns: the tokens go first.
+  expect(fitRow(TEXTS, 86, DEFAULT_DROP_ORDER, '<->').shown.has('ctx-tokens')).toBe(false)
+  expect(fitRow(TEXTS, 92, DEFAULT_DROP_ORDER, '<->').shown.has('ctx-tokens')).toBe(true)
+  expect(readSeparator('  ')).toBe('|')
+  expect(readSeparator(undefined)).toBe('|')
+  expect(readSeparator(' / ')).toBe('/')
 })
 
 test('a row that fits keeps every part', async () => {
   const { shown, branch } = fitRow(TEXTS, 86, DEFAULT_DROP_ORDER)
   expect(sorted(shown)).toEqual(sorted(ALL))
-  expect(branch).toBe(TEXTS.branch)
+  expect(branch).toBe(TEXTS['git-branch'])
 })
 
 test('parts are hidden in the default order until the row fits', async () => {
-  expect(sorted(fitRow(TEXTS, 80, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'branch', 'bar', 'percent', 'cost'])))
-  expect(sorted(fitRow(TEXTS, 70, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'branch', 'bar', 'percent'])))
-  expect(sorted(fitRow(TEXTS, 60, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'bar', 'percent'])))
-  expect(sorted(fitRow(TEXTS, 30, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'percent'])))
+  expect(sorted(fitRow(TEXTS, 80, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'git-branch', 'ctx-label', 'ctx-bar', 'ctx-percent', 'cost'])))
+  expect(sorted(fitRow(TEXTS, 70, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'git-branch', 'ctx-label', 'ctx-bar', 'ctx-percent'])))
+  expect(sorted(fitRow(TEXTS, 60, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'ctx-label', 'ctx-bar', 'ctx-percent'])))
+  expect(sorted(fitRow(TEXTS, 30, DEFAULT_DROP_ORDER).shown)).toEqual(sorted(new Set<Part>(['model', 'effort', 'ctx-label', 'ctx-percent'])))
 })
 
-test('model and percent are never hidden', async () => {
-  expect(sorted(fitRow(TEXTS, 5, DEFAULT_DROP_ORDER).shown)).toEqual(['model', 'percent'])
+test('the context label can be hidden on its own', async () => {
+  // "context " is 8 cells: without it the full row is 78 wide.
+  const { shown } = fitRow(TEXTS, 80, ['ctx-label', 'ctx-tokens'])
+  expect(shown.has('ctx-label')).toBe(false)
+  expect(shown.has('ctx-tokens')).toBe(true)
+  expect(rowWidth(TEXTS, shown)).toBe(78)
+})
+
+test('a part left out of the hide order is never hidden', async () => {
+  // The default order leaves out the model and the percentage.
+  expect(sorted(fitRow(TEXTS, 5, DEFAULT_DROP_ORDER).shown)).toEqual(['ctx-label', 'ctx-percent', 'model'])
+})
+
+test('every part can be hidden, the model and the percentage too', async () => {
+  // The model gone, the row is "feature/long-branch-name | context ████░░░░░░ 42% (84k/200k) | $1.23".
+  const { shown } = fitRow(TEXTS, 70, ['model', 'cost'])
+  expect(shown.has('model')).toBe(false)
+  expect(shown.has('cost')).toBe(true)
+  expect(sorted(fitRow(TEXTS, 3, ['model', 'effort', 'git-branch', 'ctx-label', 'ctx-bar', 'ctx-percent', 'ctx-tokens', 'cost']).shown)).toEqual([])
+  // The effort, the label and the tokens go with the model and the context they sit beside.
+  expect(sorted(fitRow(TEXTS, 5, ['model', 'git-branch', 'ctx-bar', 'ctx-percent']).shown)).toEqual(['cost'])
 })
 
 test('a branch still too long is shortened with an ellipsis', async () => {
   // Tokens and cost gone, the row is 67 wide: 7 cells too many for 60.
-  const { shown, branch } = fitRow(TEXTS, 60, ['tokens', 'cost'])
+  const { shown, branch } = fitRow(TEXTS, 60, ['ctx-tokens', 'cost'])
   expect(branch).toBe('feature/long-bra…')
-  expect(rowWidth({ ...TEXTS, branch }, shown)).toBe(60)
+  expect(rowWidth({ ...TEXTS, 'git-branch': branch }, shown)).toBe(60)
 })
 
 test('a branch with no character left is removed', async () => {
-  const { shown } = fitRow({ ...TEXTS, branch: 'ab' }, 10, ['tokens', 'cost'])
-  expect(shown.has('branch')).toBe(false)
+  const { shown } = fitRow({ ...TEXTS, 'git-branch': 'ab' }, 10, ['ctx-tokens', 'cost'])
+  expect(shown.has('git-branch')).toBe(false)
 })
 
 test('none hides no part, the branch is still shortened', async () => {
   const { shown, branch } = fitRow(TEXTS, 80, readDropOrder('none'))
   expect(sorted(shown)).toEqual(sorted(ALL))
   expect(branch.endsWith('…')).toBe(true)
-  expect(rowWidth({ ...TEXTS, branch }, shown)).toBe(80)
+  expect(rowWidth({ ...TEXTS, 'git-branch': branch }, shown)).toBe(80)
 })
 
 test('a part with nothing to show takes no room', async () => {
-  const { shown } = fitRow({ ...TEXTS, cost: '', tokens: '' }, 200, DEFAULT_DROP_ORDER)
+  const { shown } = fitRow({ ...TEXTS, cost: '', 'ctx-tokens': '' }, 200, DEFAULT_DROP_ORDER)
   expect(shown.has('cost')).toBe(false)
-  expect(shown.has('tokens')).toBe(false)
+  expect(shown.has('ctx-tokens')).toBe(false)
 })
 
-test('the hide order reads each preset of the picker', async () => {
-  expect(readDropOrder('tokens, cost, branch, bar, effort')).toEqual(['tokens', 'cost', 'branch', 'bar', 'effort'])
-  expect(readDropOrder('tokens, branch, bar, effort, cost')).toEqual(['tokens', 'branch', 'bar', 'effort', 'cost'])
-  expect(readDropOrder('tokens, cost, bar, effort, branch')).toEqual(['tokens', 'cost', 'bar', 'effort', 'branch'])
+test('the hide order reads any order of the parts', async () => {
+  expect(readDropOrder('ctx-tokens, cost, git-branch, ctx-bar, effort')).toEqual(['ctx-tokens', 'cost', 'git-branch', 'ctx-bar', 'effort'])
+  expect(readDropOrder('cost, effort')).toEqual(['cost', 'effort'])
+  expect(readDropOrder('model, ctx-percent, cost')).toEqual(['model', 'ctx-percent', 'cost'])
+  expect(readDropOrder('git-branch')).toEqual(['git-branch'])
   expect(readDropOrder('none')).toEqual([])
 })
 
-test('a missing or unknown hide order falls back to the default', async () => {
+test('a hide order with the names of an older version still reads', async () => {
+  expect(readDropOrder('tokens, cost, branch, bar, effort')).toEqual(['ctx-tokens', 'cost', 'git-branch', 'ctx-bar', 'effort'])
+  expect(readDropOrder('percent')).toEqual(['ctx-percent'])
+  expect(readDropOrder('ctx_bar, ctx_tokens')).toEqual(['ctx-bar', 'ctx-tokens'])
+})
+
+test('a hide order edited by hand is read leniently', async () => {
   expect(readDropOrder(undefined)).toEqual(DEFAULT_DROP_ORDER)
-  expect(readDropOrder('foo, bar baz')).toEqual(['bar'])
+  expect(readDropOrder('foo, ctx-bar baz')).toEqual(['ctx-bar'])
   expect(readDropOrder('foo')).toEqual(DEFAULT_DROP_ORDER)
   // Unknown and repeated parts are dropped, case does not matter.
-  expect(readDropOrder('TOKENS cost tokens foo')).toEqual(['tokens', 'cost'])
+  expect(readDropOrder('CTX-TOKENS cost ctx-tokens foo')).toEqual(['ctx-tokens', 'cost'])
+})
+
+test('a typed hide order is stored in a clean form', async () => {
+  expect(normalizeDropOrder('CTX-TOKENS ,cost   git-branch,git-branch')).toEqual({ value: 'ctx-tokens, cost, git-branch' })
+  expect(normalizeDropOrder(' Effort ')).toEqual({ value: 'effort' })
+  expect(normalizeDropOrder('Model ctx-percent')).toEqual({ value: 'model, ctx-percent' })
+  // An old name is stored under its new one.
+  expect(normalizeDropOrder('tokens bar')).toEqual({ value: 'ctx-tokens, ctx-bar' })
+  expect(normalizeDropOrder('NONE')).toEqual({ value: 'none' })
+  // Empty restores the default.
+  expect(normalizeDropOrder('  , ')).toEqual({ value: 'ctx-tokens, cost, git-branch, ctx-bar, effort' })
+})
+
+test('a typed hide order with a wrong part is refused, saying why', async () => {
+  expect(normalizeDropOrder('ctx-tokens, foo, baz')).toEqual({
+    error: 'Unknown parts: foo, baz. Use model, effort, git-branch, ctx-label, ctx-bar, ctx-percent, ctx-tokens, cost, or none.',
+  })
+  expect(normalizeDropOrder('none, cost')).toEqual({ error: 'none cannot be combined with parts.' })
 })
 
 test('the display settings default to showing everything', async () => {
   expect(readDisplay({})).toEqual({
-    model: true, effort: true, branch: true, context: 'both', tokens: 'on', cost: true, dropOrder: DEFAULT_DROP_ORDER,
+    model: true, effort: true, branch: true, context: 'both', contextLabel: true, tokens: 'on', cost: true,
+    separator: '|', dropOrder: DEFAULT_DROP_ORDER,
   })
 })
 
 test('the display settings follow /config', async () => {
   expect(readDisplay({
-    showModel: false, showEffort: false, showBranch: false, context: 'bar', tokens: 'off', showCost: false, dropOrder: 'none',
+    showModel: false, showEffort: false, showBranch: false, context: 'bar', showContextLabel: false, tokens: 'off',
+    showCost: false, separator: ' • ', dropOrder: 'none',
   })).toEqual({
-    model: false, effort: false, branch: false, context: 'bar', tokens: 'off', cost: false, dropOrder: [],
+    model: false, effort: false, branch: false, context: 'bar', contextLabel: false, tokens: 'off', cost: false,
+    separator: '•', dropOrder: [],
   })
   // A value outside the picker keeps the default.
   expect(readDisplay({ context: 'wide', tokens: 'auto' })).toMatchObject({ context: 'both', tokens: 'on' })

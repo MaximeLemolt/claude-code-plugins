@@ -16,25 +16,28 @@ type World = {
 function engine(on: On, world: World): void {
   world.reads = 0
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('session.surfaces', () => ({ value: world.surfaces }))
+  on('session.surfaces', () => ({ value: world.surfaces as any }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', (_, e: any) => (world.reads!++, {
+  // A partial usage: only the fields the plugin reads.
+  on('session.usage', (_, e) => (world.reads!++, {
     value: {
       context: {
         ...world.context,
         window: 1_000_000,
-        ...(e?.breakdown ? { breakdown: world.estimate } : {}),
+        ...(e.breakdown ? { breakdown: world.estimate } : {}),
       },
       cost: { usd: 1.23 },
-    },
+    } as any,
   }))
   on('config.list', async () => {
     await world.slowConfig?.sleep(100)
     return { value: [] }
   })
   on('settings.read', () => ({ value: {} }))
-  on('process.run', () => (world.reads!++, { value: { exitCode: 0, stdout: 'main\n', stderr: '' } }))
+  on('process.run', () => (world.reads!++, {
+    value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   on('command.run', () => ({ text: '' }))
 }
 
@@ -65,6 +68,7 @@ test('the terminal shows the row', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /Opus 5\.5/ }))?.text).toContain('Opus 5.5')
   expect(await ui.find({ type: 'Text', text: /12%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /main/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^context $/ })).toBeDefined()
 
   // Each part is painted with a /theme key, so it follows the person's theme.
   const color = async (text: RegExp) => (await ui.find({ type: 'Text', text }))?.props.color
@@ -138,5 +142,35 @@ test('after /compact the row shows the compacted context without a new turn', as
 
   expect(await ui.find({ type: 'Text', text: /8%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /40%/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('/config stores a typed hide order in a clean form, or refuses it', async ($, on) => {
+  const stored: unknown[] = []
+  // The engine beneath writes the row and answers what it stored.
+  on('config.set', (_, e) => {
+    stored.push(e.value)
+    return { value: e.value }
+  })
+
+  const key = 'session-overview.dropOrder'
+  expect(await $.config.set({ key, value: 'CTX-TOKENS ,cost   git-branch,git-branch' } as any)).toEqual({ value: 'ctx-tokens, cost, git-branch' })
+  const refused = await $.config.set({ key, value: 'ctx-tokens, foo' } as any)
+  expect(refused.deny).toBe('Unknown part: foo. Use model, effort, git-branch, ctx-label, ctx-bar, ctx-percent, ctx-tokens, cost, or none.')
+  expect(stored).toEqual(['ctx-tokens, cost, git-branch'])
+})
+
+test('the context label follows its setting', { options: { showContextLabel: false } }, async ($, on) => {
+  mock.clock(on)
+  engine(on, {
+    surfaces: ['terminal'],
+    context: { percent: 12, tokens: 120_000 },
+    estimate: { percentage: 12, totalTokens: 120_000 },
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await ui.find({ type: 'Text', text: /12%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^context $/ })).toBeUndefined()
   await ui.unmount()
 })

@@ -3,9 +3,14 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Line } from '../types'
 import {
   BAR_WIDTH, COLORS, contextBar, contextColor, fitRow, formatTokens, isPercent, modelLabel,
-  readDisplay, savedEffortFor,
+  normalizeDropOrder, readDisplay, savedEffortFor,
 } from './row'
 import type { Display, Texts } from './row'
+
+// This plugin's Hide order row in /config: `<plugin>.<field>`.
+function isDropOrderRow(key: string): boolean {
+  return /^session-overview(@[^.]+)?\.dropOrder$/.test(key)
+}
 
 // Events refresh the row at once; these slow timers only catch changes no event announces
 // (a branch switched from another terminal, a settings file edited by hand).
@@ -340,6 +345,12 @@ export const register: Register = (on, options) => {
   })
 
   on('config.set', async ($, e, next) => {
+    // The hide order is typed freely in /config: store it in a clean form, or refuse it with why.
+    if (isDropOrderRow(e.key) && typeof e.value === 'string') {
+      const checked = normalizeDropOrder(e.value)
+      if ('error' in checked) return { deny: checked.error }
+      return next({ ...e, value: checked.value })
+    }
     const result = await next(e)
     if (isModelRow(e) || isEffortRow(e)) {
       inTurn = false
@@ -436,22 +447,23 @@ export const register: Register = (on, options) => {
     const texts: Texts = {
       model,
       effort: model && display.effort ? state.effort : '',
-      branch: display.branch ? state.branch : '',
-      bar: percent !== null && display.context !== 'percent' ? 'bar' : '',
-      percent: percent !== null && display.context !== 'bar' ? `${Math.round(percent)}%` : '',
-      tokens: percent !== null && display.tokens === 'on' && tokens !== null && window !== null && window > 0
+      'git-branch': display.branch ? state.branch : '',
+      'ctx-label': percent !== null && display.contextLabel ? 'context' : '',
+      'ctx-bar': percent !== null && display.context !== 'percent' ? 'bar' : '',
+      'ctx-percent': percent !== null && display.context !== 'bar' ? `${Math.round(percent)}%` : '',
+      'ctx-tokens': percent !== null && display.tokens === 'on' && tokens !== null && window !== null && window > 0
         ? `${formatTokens(tokens)}/${formatTokens(window)}`
         : '',
       cost: display.cost && isPercent(state.cost) ? `$${state.cost.toFixed(2)}` : '',
     }
     const columns = isPercent(e.props.bodyColumns) ? e.props.bodyColumns : Infinity
-    const { shown, branch } = fitRow(texts, columns, display.dropOrder)
+    const { shown, branch } = fitRow(texts, columns, display.dropOrder, display.separator)
     if (!shown.size) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const parts: unknown[] = []
     const add = (key: string, part: unknown) => {
-      if (parts.length) parts.push(<Text key={`sep-${key}`} dimColor>{' | '}</Text>)
+      if (parts.length) parts.push(<Text key={`sep-${key}`} dimColor>{` ${display.separator} `}</Text>)
       parts.push(part)
     }
 
@@ -459,19 +471,19 @@ export const register: Register = (on, options) => {
       add('model', <Text key="model" color={COLORS.model}>{texts.model}</Text>)
       if (shown.has('effort')) parts.push(<Text key="effort" dimColor>{` (${texts.effort})`}</Text>)
     }
-    if (shown.has('branch')) add('branch', <Text key="branch" color={COLORS.branch}>{branch}</Text>)
-    if (percent !== null && (shown.has('bar') || shown.has('percent'))) {
+    if (shown.has('git-branch')) add('branch', <Text key="branch" color={COLORS.branch}>{branch}</Text>)
+    if (percent !== null && (shown.has('ctx-bar') || shown.has('ctx-percent'))) {
       // A stale figure is dimmed rather than colored: its severity is not known any more.
       const color = isStale ? undefined : contextColor(percent)
       const bar = contextBar(percent)
-      const showBar = shown.has('bar')
+      const showBar = shown.has('ctx-bar')
       add('context', (
         <Text key="context">
-          <Text dimColor>{'context '}</Text>
+          {shown.has('ctx-label') ? <Text dimColor>{`${texts['ctx-label']} `}</Text> : null}
           {showBar ? <Text color={color} dimColor={isStale}>{bar.filled}</Text> : null}
           {showBar ? <Text dimColor>{bar.empty}</Text> : null}
-          {shown.has('percent') ? <Text color={color} dimColor={isStale}>{`${showBar ? ' ' : ''}${texts.percent}`}</Text> : null}
-          {shown.has('tokens')
+          {shown.has('ctx-percent') ? <Text color={color} dimColor={isStale}>{`${showBar ? ' ' : ''}${texts['ctx-percent']}`}</Text> : null}
+          {shown.has('ctx-tokens')
             ? (
               <Text>
                 <Text dimColor>{' ('}</Text>

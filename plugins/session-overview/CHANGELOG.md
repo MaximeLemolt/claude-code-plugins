@@ -3,6 +3,24 @@
 All notable changes to the session-overview plugin. Newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-11-20
+
+### Changed
+
+- **Hide order** is free text again, so any order can be set. The parts are `model`, `effort`,
+  `git-branch`, `ctx-label`, `ctx-bar`, `ctx-percent`, `ctx-tokens` and `cost`, or `none`. Every
+  part can be hidden now, the model and the percentage included.
+- `/config` stores what is typed in a clean form: separators and case do not matter, and repeats
+  are dropped. An unknown part is refused. Names from older versions (`bar`, `percent`, `tokens`,
+  `branch`) are still read.
+- The effort goes with the model, and the context label and tokens go with the context: a row
+  with every part hidden is not drawn at all.
+
+### Added
+
+- **Show context label** setting: show or hide the word "context" before the bar.
+- **Separator** setting: the text drawn between the parts, `|` by default.
+
 ## [0.4.4] - 2026-11-20
 
 ### Changed

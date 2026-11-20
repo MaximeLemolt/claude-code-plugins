@@ -91,58 +91,106 @@ export type Display = {
   effort: boolean
   branch: boolean
   context: 'both' | 'bar' | 'percent' | 'off'
+  contextLabel: boolean
   tokens: 'on' | 'off'
   cost: boolean
+  // Drawn between the parts, with a space on each side.
+  separator: string
   // Parts removed one by one, in this order, while the row is wider than the terminal.
   dropOrder: readonly Part[]
 }
 
-export type Part = 'model' | 'effort' | 'branch' | 'bar' | 'percent' | 'tokens' | 'cost'
-export const PARTS: readonly Part[] = ['model', 'effort', 'branch', 'bar', 'percent', 'tokens', 'cost']
-export const DEFAULT_DROP_ORDER: readonly Part[] = ['tokens', 'cost', 'branch', 'bar', 'effort']
+export type Part = 'model' | 'effort' | 'git-branch' | 'ctx-label' | 'ctx-bar' | 'ctx-percent' | 'ctx-tokens' | 'cost'
+export const PARTS: readonly Part[] = ['model', 'effort', 'git-branch', 'ctx-label', 'ctx-bar', 'ctx-percent', 'ctx-tokens', 'cost']
+export const DEFAULT_DROP_ORDER: readonly Part[] = ['ctx-tokens', 'cost', 'git-branch', 'ctx-bar', 'effort']
 
+// Names an older version stored, still read and saved under their new name.
+const RENAMED: Readonly<Record<string, Part>> = {
+  'bar': 'ctx-bar', 'percent': 'ctx-percent', 'tokens': 'ctx-tokens', 'branch': 'git-branch',
+  'ctx_bar': 'ctx-bar', 'ctx_percent': 'ctx-percent', 'ctx_tokens': 'ctx-tokens',
+}
+
+function words(value: string): string[] {
+  return value.split(/[\s,]+/).map(word => word.toLowerCase()).filter(Boolean)
+    .map(word => RENAMED[word] ?? word)
+}
+
+// What the stored setting means. A value edited by hand is read leniently: unknown words are
+// skipped, and nothing valid left means the default.
 export function readDropOrder(value: unknown): readonly Part[] {
   if (typeof value !== 'string') return DEFAULT_DROP_ORDER
-  if (value === 'none') return []
-  const parts = value.split(/[\s,]+/).map(part => part.toLowerCase())
+  const listed = words(value)
+  if (listed.length === 1 && listed[0] === 'none') return []
+  const parts = listed
     .filter((part, index, all): part is Part => PARTS.includes(part as Part) && all.indexOf(part) === index)
   return parts.length ? parts : DEFAULT_DROP_ORDER
+}
+
+// What /config stores for a typed hide order: the parts in a clean form, `ctx-tokens, cost, git-branch`,
+// or why it is refused. Separators and case do not matter, repeats are dropped, empty is the default.
+export function normalizeDropOrder(value: string): { value: string } | { error: string } {
+  const listed = words(value)
+  if (!listed.length) return { value: DEFAULT_DROP_ORDER.join(', ') }
+  if (listed.includes('none')) {
+    return listed.length === 1 ? { value: 'none' } : { error: 'none cannot be combined with parts.' }
+  }
+  const unknown = [...new Set(listed.filter(word => !PARTS.includes(word as Part)))]
+  if (unknown.length) {
+    return { error: `Unknown part${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Use ${PARTS.join(', ')}, or none.` }
+  }
+  return { value: [...new Set(listed)].join(', ') }
 }
 
 // The text of each part the settings and the state allow, '' for a part with nothing to show.
 export type Texts = Record<Part, string>
 
 // Width of the row in cells, as the render below lays it out (every character is one cell wide).
-export function rowWidth(texts: Texts, shown: ReadonlySet<Part>): number {
+export function rowWidth(texts: Texts, shown: ReadonlySet<Part>, separator = DEFAULT_SEPARATOR): number {
   const has = (part: Part) => shown.has(part) && texts[part] !== ''
   const segments: number[] = []
   if (has('model')) segments.push(texts.model.length + (has('effort') ? ` (${texts.effort})`.length : 0))
-  if (has('branch')) segments.push(texts.branch.length)
-  if (has('bar') || has('percent')) {
-    segments.push('context '.length +
-      (has('bar') ? BAR_WIDTH : 0) +
-      (has('percent') ? (has('bar') ? 1 : 0) + texts.percent.length : 0) +
-      (has('tokens') ? ` (${texts.tokens})`.length : 0))
+  if (has('git-branch')) segments.push(texts['git-branch'].length)
+  if (has('ctx-bar') || has('ctx-percent')) {
+    segments.push((has('ctx-label') ? `${texts['ctx-label']} `.length : 0) +
+      (has('ctx-bar') ? BAR_WIDTH : 0) +
+      (has('ctx-percent') ? (has('ctx-bar') ? 1 : 0) + texts['ctx-percent'].length : 0) +
+      (has('ctx-tokens') ? ` (${texts['ctx-tokens']})`.length : 0))
   }
   if (has('cost')) segments.push(texts.cost.length)
-  return segments.reduce((sum, width) => sum + width, 0) + ' | '.length * Math.max(0, segments.length - 1)
+  return segments.reduce((sum, width) => sum + width, 0) + ` ${separator} `.length * Math.max(0, segments.length - 1)
 }
 
 // Drops parts in the chosen order until the row fits, then shortens the branch if it still does not.
-export function fitRow(texts: Texts, columns: number, dropOrder: readonly Part[]): { shown: Set<Part>; branch: string } {
+export function fitRow(
+  texts: Texts, columns: number, dropOrder: readonly Part[], separator = DEFAULT_SEPARATOR,
+): { shown: Set<Part>; branch: string } {
   const shown = new Set(PARTS.filter(part => texts[part] !== ''))
   for (const part of dropOrder) {
-    if (rowWidth(texts, shown) <= columns) break
+    if (rowWidth(texts, shown, separator) <= columns) break
     shown.delete(part)
   }
-  let branch = texts.branch
-  const overflow = rowWidth(texts, shown) - columns
-  if (overflow > 0 && shown.has('branch')) {
+  // The effort sits beside the model, the label and the tokens beside the context: they go with
+  // them, so a row with every part hidden is empty and not drawn at all.
+  if (!shown.has('model')) shown.delete('effort')
+  if (!shown.has('ctx-bar') && !shown.has('ctx-percent')) {
+    shown.delete('ctx-label')
+    shown.delete('ctx-tokens')
+  }
+  let branch = texts['git-branch']
+  const overflow = rowWidth(texts, shown, separator) - columns
+  if (overflow > 0 && shown.has('git-branch')) {
     const keep = branch.length - overflow - 1
     if (keep >= 1) branch = `${branch.slice(0, keep)}…`
-    else shown.delete('branch')
+    else shown.delete('git-branch')
   }
   return { shown, branch }
+}
+
+export const DEFAULT_SEPARATOR = '|'
+
+// The separator as typed, without the spaces around it; nothing typed means the default.
+export function readSeparator(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : DEFAULT_SEPARATOR
 }
 
 export function readDisplay(options: PluginOptions): Display {
@@ -154,8 +202,10 @@ export function readDisplay(options: PluginOptions): Display {
     effort: flag('showEffort'),
     branch: flag('showBranch'),
     context: pick('context', ['both', 'bar', 'percent', 'off'] as const, 'both'),
+    contextLabel: flag('showContextLabel'),
     tokens: pick('tokens', ['on', 'off'] as const, 'on'),
     cost: flag('showCost'),
+    separator: readSeparator(options.separator),
     dropOrder: readDropOrder(options.dropOrder),
   }
 }
