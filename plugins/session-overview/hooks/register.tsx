@@ -97,6 +97,9 @@ let configPolling: number | undefined
 let gitPolling: number | undefined
 let generation = 0
 let inTurn = false
+// The plugin API exposes no getter for the session's effort, so remember the last /effort choice.
+let selectedEffort = ''
+const LEVELS = /^(low|medium|high|xhigh|max|auto)$/i
 
 type Row = { key: unknown; label?: unknown; value: unknown }
 
@@ -119,15 +122,19 @@ async function refreshConfig($: EngineInterface, currentGeneration: number): Pro
   if (configPolling === currentGeneration) return
   configPolling = currentGeneration
   try {
-    const [rows, sessionModel] = await Promise.all([
+    const [rows, sessionModel, savedEffort] = await Promise.all([
       $.config.list(),
       $.session.model().catch(() => ''),
+      $.settings.read({ key: 'effortLevel' }).catch(() => undefined),
     ])
     if (currentGeneration !== generation) return
     // session.model() is what /model shows (with version); the config row may be a bare alias.
     const change: Partial<Line> = { configModel: sessionModel || rowValue(rows.find(isModelRow)) }
     // turn.step supplies the actual effort; only override it with a configured value, never with nothing.
-    const configuredEffort = rowValue(rows.find(isEffortRow))
+    // A level chosen with /effort (session override) wins over the saved/configured one.
+    const configuredEffort = selectedEffort ||
+      rowValue(rows.find(isEffortRow)) ||
+      (typeof savedEffort === 'string' ? savedEffort : '')
     if (!inTurn && configuredEffort) change.effort = configuredEffort
     await patch($, change)
   } finally {
@@ -188,7 +195,21 @@ export const register: Register = on => {
     return result
   })
 
+  // /effort <level> changes the session's effort at once; show it before the next request.
+  on('command.run', { command: ['effort', 'model'] }, async ($, e, next) => {
+    const result = await next(e)
+    const level = e.args.trim().split(/\s+/)[0] ?? ''
+    if (e.command === 'effort' && LEVELS.test(level)) {
+      selectedEffort = level.toLowerCase() === 'auto' ? '' : level.toLowerCase()
+      inTurn = false
+      if (selectedEffort) await patch($, { effort: selectedEffort })
+    }
+    void refreshConfig($, generation).catch(() => {})
+    return result
+  })
+
   on('session.end', ($, e, next) => {
+    selectedEffort = ''
     timers.forEach(timer => timer.cancel())
     timers = []
     generation++ // Ignore metadata requests started in the previous session.
