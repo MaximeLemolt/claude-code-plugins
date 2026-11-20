@@ -13,7 +13,7 @@ From another machine or Claude Code session:
 
 ```
 claude plugin marketplace add <path-or-url-to-this-repo>
-claude plugin install <plugin-name>@claude-code-plugins
+claude plugin install <plugin-name>@mlemolt-plugins
 ```
 
 ## Adding a plugin

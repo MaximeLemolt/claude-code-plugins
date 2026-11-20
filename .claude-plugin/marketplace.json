@@ -1,8 +1,14 @@
 {
-  "name": "claude-code-plugins",
+  "name": "mlemolt-plugins",
   "description": "Plugins Claude Code personnels",
   "owner": {
     "name": "mlemolt"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "session-overview",
+      "source": "./plugins/session-overview",
+      "description": "Colored row above the prompt: model, git branch, context %, session cost."
+    }
+  ]
 }
