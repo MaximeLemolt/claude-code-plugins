@@ -6,6 +6,9 @@ export type Line = {
   percent: number | null
   // The context figure predates the last compaction and could not be refreshed yet.
   isStale: boolean
+  // Tokens in the context and the model's window, shown beside the percentage.
+  tokens: number | null
+  window: number | null
   cost: number | null
 }
 

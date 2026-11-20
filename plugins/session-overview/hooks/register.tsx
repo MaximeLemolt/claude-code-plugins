@@ -24,6 +24,8 @@ const EMPTY: Line = {
   branch: '',
   percent: null,
   isStale: false,
+  tokens: null,
+  window: null,
   cost: null,
 }
 
@@ -98,18 +100,47 @@ async function gitBranch($: EngineInterface): Promise<string> {
 
 // The host's own local estimate of the context (what /context sums up); free, but it can differ
 // by a few points from the figure of the last response, so it is only a fallback.
-async function estimatePercent($: EngineInterface): Promise<number | null> {
+async function estimateContext($: EngineInterface): Promise<{ percent: number; tokens: number | null } | null> {
   try {
     const usage = await $.session.usage({ breakdown: 'summary' })
-    const percentage = usage.context.breakdown?.percentage
-    return typeof percentage === 'number' && Number.isFinite(percentage) ? Math.min(100, percentage) : null
+    const breakdown = usage.context.breakdown
+    if (!breakdown || !isPercent(breakdown.percentage)) return null
+    return {
+      percent: Math.min(100, breakdown.percentage),
+      tokens: isPercent(breakdown.totalTokens) ? breakdown.totalTokens : null,
+    }
   } catch {
     return null
   }
 }
 
+// 64000 -> "64k", 1000000 -> "1M": short enough to sit beside the bar.
+function formatTokens(count: number): string {
+  if (count < 1_000) return String(Math.round(count))
+  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`
+  return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+}
+
 function isPercent(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+// After a compaction the host keeps reporting the last response's figure until a new response
+// arrives; remember it so it is not mistaken for the compacted context.
+let figureBeforeCompact: number | null = null
+
+function contextKey(context: { percent?: number; tokens?: number }): number | null {
+  return isPercent(context.tokens) ? context.tokens : isPercent(context.percent) ? context.percent : null
+}
+
+// The host's figure for the last response, or null when there is none or it predates a compaction.
+function freshContext(context: { percent?: number; tokens?: number }): { percent: number; tokens: number | null } | null {
+  if (!isPercent(context.percent)) return null
+  if (figureBeforeCompact !== null) {
+    if (contextKey(context) === figureBeforeCompact) return null
+    figureBeforeCompact = null
+  }
+  return { percent: context.percent, tokens: isPercent(context.tokens) ? context.tokens : null }
 }
 
 // Never replaces a figure with nothing: a missing value keeps the last one shown.
@@ -118,12 +149,14 @@ async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promi
     const usage = await $.session.usage()
     if (!isCurrent()) return
     const change: Partial<Line> = {}
-    const percent = isPercent(usage.context.percent) ? usage.context.percent : await estimatePercent($)
+    const context = freshContext(usage.context) ?? await estimateContext($)
     if (!isCurrent()) return
-    if (percent !== null) {
-      change.percent = percent
+    if (context) {
+      change.percent = context.percent
+      change.tokens = context.tokens
       change.isStale = false
     }
+    if (isPercent(usage.context.window)) change.window = usage.context.window
     const usd = usage.cost?.usd
     if (isPercent(usd)) change.cost = usd
     await patch($, change)
@@ -281,7 +314,8 @@ export const register: Register = on => {
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     inTurn = false
     // The old conversation's context figure no longer applies; start() fetches the new one.
-    await patch($, { percent: null, isStale: false })
+    figureBeforeCompact = null
+    await patch($, { percent: null, tokens: null, isStale: false })
     start($)
     return next(e)
   })
@@ -291,8 +325,10 @@ export const register: Register = on => {
   on('classic.PostCompact', async ($, e, next) => {
     // The last figure predates the compaction: show it as stale until a fresh one replaces it.
     await patch($, { isStale: true })
-    const percent = await estimatePercent($)
-    if (percent !== null) await patch($, { percent, isStale: false })
+    const before = await $.session.usage().catch(() => undefined)
+    figureBeforeCompact = before ? contextKey(before.context) : null
+    const context = await estimateContext($)
+    if (context) await patch($, { ...context, isStale: false })
     return next(e)
   })
 
@@ -302,9 +338,13 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Another model may have another window (Haiku 4.5: 200k): read the usage again at once
+  // instead of waiting for the end of the next turn.
   on('classic.PostModelSwitch', ($, e, next) => {
     inTurn = false
     void refreshConfig($, generation).catch(() => {})
+    const currentGeneration = generation
+    void refreshUsage($, () => currentGeneration === generation)
     return next(e)
   })
 
@@ -340,6 +380,10 @@ export const register: Register = on => {
       if (selectedEffort) await patch($, { effort: selectedEffort })
     }
     void refreshConfig($, generation).catch(() => {})
+    if (e.command === 'model') {
+      const currentGeneration = generation
+      void refreshUsage($, () => currentGeneration === generation)
+    }
     return result
   })
 
@@ -348,6 +392,7 @@ export const register: Register = on => {
     lastSavedEffort = ''
     lastTurnEffort = ''
     lastConfigModel = ''
+    figureBeforeCompact = null
     timers.forEach(timer => timer.cancel())
     timers = []
     generation++ // Ignore metadata requests started in the previous session.
@@ -368,8 +413,11 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     const change: Partial<Line> = {}
-    if (isPercent(e.context.percent)) {
-      change.percent = e.context.percent
+    if (isPercent(e.context.window)) change.window = e.context.window
+    const context = freshContext(e.context)
+    if (context) {
+      change.percent = context.percent
+      change.tokens = context.tokens
       change.isStale = false
     } else {
       const currentGeneration = generation
@@ -399,7 +447,7 @@ export const register: Register = on => {
 
     const state = await read($, line)
     const model = modelLabel(state)
-    const { branch, effort, percent, isStale, cost } = state
+    const { branch, effort, percent, isStale, tokens, window, cost } = state
     if (!model && !branch && percent === null && cost === null) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
@@ -424,6 +472,15 @@ export const register: Register = on => {
           <Text color={color} dimColor={isStale}>{bar.filled}</Text>
           <Text dimColor>{bar.empty}</Text>
           <Text color={color} dimColor={isStale}>{` ${Math.round(percent)}%`}</Text>
+          {tokens !== null && window !== null && window > 0
+            ? (
+              <Text>
+                <Text dimColor>{' ('}</Text>
+                <Text color={color} dimColor={isStale}>{formatTokens(tokens)}</Text>
+                <Text dimColor>{`/${formatTokens(window)})`}</Text>
+              </Text>
+            )
+            : null}
         </Text>
       ))
     }
