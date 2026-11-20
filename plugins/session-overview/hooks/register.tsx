@@ -167,19 +167,38 @@ async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promi
   }
 }
 
-// Right after /compact the host still reports the pre-compaction figures: look again a few times
-// until the estimate moves, instead of waiting for the next turn.
-async function refreshAfterCompact($: EngineInterface, isCurrent: () => boolean, previous: number | null): Promise<void> {
-  for (const delay of [1_000, 2_000, 4_000, 8_000, 15_000]) {
-    await $.process.run(['sleep', String(delay / 1_000)], { timeoutMs: delay + 2_000 } as any).catch(() => undefined)
-    if (!isCurrent()) return
-    const context = await estimateContext($)
-    if (!isCurrent()) return
-    if (context && context.tokens !== previous) {
-      await patch($, { ...context, isStale: false })
-      return
-    }
-  }
+// Right after /compact the host still reports the pre-compaction figures, and its estimate moves about
+// a second later: show the old figure as stale, then look again a few times until the estimate moves,
+// instead of waiting for the next turn. `$.clock.after` timers outlive the hook that sets them.
+async function afterCompact($: EngineInterface): Promise<void> {
+  if (!isTerminal) return
+  const before = await $.session.usage().catch(() => undefined)
+  // The host keeps this figure until the next response: it must not replace the compacted one.
+  figureBeforeCompact = before ? contextKey(before.context) : null
+  await patch($, { isStale: true })
+  const context = await estimateContext($)
+  if (context) await patch($, { ...context, isStale: false })
+  const currentGeneration = generation
+  refreshAfterCompact($, () => currentGeneration === generation, context?.tokens ?? null)
+}
+
+const COMPACT_RETRY_DELAYS = [1_000, 2_000, 4_000, 8_000, 15_000]
+let compactRetry: { cancel(): void } | null = null
+
+function refreshAfterCompact($: EngineInterface, isCurrent: () => boolean, previous: number | null, attempt = 0): void {
+  compactRetry?.cancel()
+  compactRetry = null
+  const delay = COMPACT_RETRY_DELAYS[attempt]
+  if (delay === undefined) return
+  compactRetry = $.clock.after(delay, () => void retryAfterCompact($, isCurrent, previous, attempt).catch(() => {}))
+}
+
+async function retryAfterCompact($: EngineInterface, isCurrent: () => boolean, previous: number | null, attempt: number): Promise<void> {
+  if (!isCurrent()) return
+  const context = await estimateContext($)
+  if (!isCurrent()) return
+  if (context && context.tokens !== previous) await patch($, { ...context, isStale: false })
+  else refreshAfterCompact($, isCurrent, previous, attempt + 1)
 }
 
 let timers: { cancel(): void }[] = []
@@ -427,18 +446,13 @@ export const register: Register = (on, options) => {
   })
 
   // `usage().context.percent` only follows the last model response, so it stays stale after
-  // /compact until the next turn. Right after compaction, use the local estimate instead.
-  on('classic.PostCompact', async ($, e, next) => {
-    if (!isTerminal) return next(e)
-    // The last figure predates the compaction: show it as stale until a fresh one replaces it.
-    await patch($, { isStale: true })
-    const before = await $.session.usage().catch(() => undefined)
-    figureBeforeCompact = before ? contextKey(before.context) : null
-    const context = await estimateContext($)
-    if (context) await patch($, { ...context, isStale: false })
-    const currentGeneration = generation
-    void refreshAfterCompact($, () => currentGeneration === generation, context?.tokens ?? null)
-    return next(e)
+  // /compact until the next turn. In the terminal the CLI's built-in cc-plugin-sec-default sends
+  // session.compact and classic.PostCompact on past this plugin; the end of the /compact command
+  // reaches it. An automatic compaction happens within a turn, whose response refreshes the figure.
+  on('command.run', { command: ['compact'] }, async ($, e, next) => {
+    const result = await next(e)
+    await afterCompact($)
+    return result
   })
 
   // Settings files changed (the effort picker and the app's selector write them).
