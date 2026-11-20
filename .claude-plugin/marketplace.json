@@ -1,0 +1,8 @@
+{
+  "name": "claude-code-plugins",
+  "description": "Plugins Claude Code personnels",
+  "owner": {
+    "name": "mlemolt"
+  },
+  "plugins": []
+}
