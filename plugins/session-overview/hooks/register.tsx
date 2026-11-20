@@ -21,6 +21,7 @@ const EMPTY: Line = {
   effort: '',
   branch: '',
   percent: null,
+  isStale: false,
   cost: null,
 }
 
@@ -93,14 +94,37 @@ async function gitBranch($: EngineInterface): Promise<string> {
   }
 }
 
+// The host's own local estimate of the context (what /context sums up); free, but it can differ
+// by a few points from the figure of the last response, so it is only a fallback.
+async function estimatePercent($: EngineInterface): Promise<number | null> {
+  try {
+    const usage = await $.session.usage({ breakdown: 'summary' })
+    const percentage = usage.context.breakdown?.percentage
+    return typeof percentage === 'number' && Number.isFinite(percentage) ? Math.min(100, percentage) : null
+  } catch {
+    return null
+  }
+}
+
+function isPercent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+// Never replaces a figure with nothing: a missing value keeps the last one shown.
 async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promise<void> {
   try {
     const usage = await $.session.usage()
     if (!isCurrent()) return
-    await patch($, {
-      percent: usage.context.percent ?? null,
-      cost: usage.cost?.usd ?? null,
-    })
+    const change: Partial<Line> = {}
+    const percent = isPercent(usage.context.percent) ? usage.context.percent : await estimatePercent($)
+    if (!isCurrent()) return
+    if (percent !== null) {
+      change.percent = percent
+      change.isStale = false
+    }
+    const usd = usage.cost?.usd
+    if (isPercent(usd)) change.cost = usd
+    await patch($, change)
   } catch {
     // Keep the last valid usage values if the API is temporarily unavailable.
   }
@@ -215,8 +239,10 @@ export const register: Register = on => {
   })
 
   // /clear, /resume and /branch reset session state without firing session.start.
-  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, ($, e, next) => {
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     inTurn = false
+    // The old conversation's context figure no longer applies; start() fetches the new one.
+    await patch($, { percent: null, isStale: false })
     start($)
     return next(e)
   })
@@ -224,15 +250,10 @@ export const register: Register = on => {
   // `usage().context.percent` only follows the last model response, so it stays stale after
   // /compact until the next turn. Right after compaction, use the local estimate instead.
   on('classic.PostCompact', async ($, e, next) => {
-    try {
-      const usage = await $.session.usage({ breakdown: 'summary' })
-      const percentage = usage.context.breakdown?.percentage
-      if (typeof percentage === 'number' && Number.isFinite(percentage)) {
-        await patch($, { percent: Math.min(100, percentage) })
-      }
-    } catch {
-      // Keep the previous value; the next turn corrects it.
-    }
+    // The last figure predates the compaction: show it as stale until a fresh one replaces it.
+    await patch($, { isStale: true })
+    const percent = await estimatePercent($)
+    if (percent !== null) await patch($, { percent, isStale: false })
     return next(e)
   })
 
@@ -279,10 +300,17 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
-    await patch($, {
-      percent: e.context.percent ?? null,
-      cost: e.cost?.usd ?? null,
-    })
+    const change: Partial<Line> = {}
+    if (isPercent(e.context.percent)) {
+      change.percent = e.context.percent
+      change.isStale = false
+    } else {
+      const currentGeneration = generation
+      void refreshUsage($, () => currentGeneration === generation)
+    }
+    const usd = e.cost?.usd
+    if (isPercent(usd)) change.cost = usd
+    await patch($, change)
     return next(e)
   })
 
@@ -304,7 +332,7 @@ export const register: Register = on => {
 
     const state = await read($, line)
     const model = modelLabel(state)
-    const { branch, effort, percent, cost } = state
+    const { branch, effort, percent, isStale, cost } = state
     if (!model && !branch && percent === null && cost === null) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
@@ -320,14 +348,15 @@ export const register: Register = on => {
     }
     if (branch) add('branch', <Text key="branch" color={COLORS.magenta}>{branch}</Text>)
     if (percent !== null && Number.isFinite(percent)) {
-      const color = contextColor(percent)
+      // A stale figure is dimmed rather than colored: its severity is not known any more.
+      const color = isStale ? undefined : contextColor(percent)
       const bar = contextBar(percent)
       add('context', (
         <Text key="context">
           <Text dimColor>{'context '}</Text>
-          <Text color={color}>{bar.filled}</Text>
+          <Text color={color} dimColor={isStale}>{bar.filled}</Text>
           <Text dimColor>{bar.empty}</Text>
-          <Text color={color}>{` ${Math.round(percent)}%`}</Text>
+          <Text color={color} dimColor={isStale}>{` ${Math.round(percent)}%`}</Text>
         </Text>
       ))
     }

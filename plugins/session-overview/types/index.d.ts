@@ -4,6 +4,8 @@ export type Line = {
   effort: string
   branch: string
   percent: number | null
+  // The context figure predates the last compaction and could not be refreshed yet.
+  isStale: boolean
   cost: number | null
 }
 
