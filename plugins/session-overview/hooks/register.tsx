@@ -12,8 +12,10 @@ const COLORS = {
   magenta: '#af87d7',
 } as const
 
-const CONFIG_POLL_MS = 1_000
-const GIT_POLL_MS = 5_000
+// Events refresh the row at once; these slow timers only catch changes no event announces
+// (a branch switched from another terminal, a settings file edited by hand).
+const CONFIG_POLL_MS = 30_000
+const GIT_POLL_MS = 30_000
 
 const EMPTY: Line = {
   model: '',
@@ -131,14 +133,23 @@ async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promi
 }
 
 let timers: { cancel(): void }[] = []
-let configPolling: number | undefined
-let gitPolling: number | undefined
 let generation = 0
 let inTurn = false
 // The plugin API exposes no getter for the session's effort, so remember the last /effort choice.
 let selectedEffort = ''
 let lastSavedEffort = ''
+// The effort the engine really sent on the last turn of this session. A session-only choice (`max`,
+// the app's selector) is saved nowhere, so between turns this is the best figure there is.
+let lastTurnEffort = ''
+let lastConfigModel = ''
 const LEVELS = /^(low|medium|high|xhigh|max|auto)$/i
+
+// Each refresh runs one at a time; a request that arrives meanwhile makes it run once more, so an
+// event is never dropped (a plain "already running" guard would lose it until the next timer).
+let isConfigRunning = false
+let isConfigRequested = false
+let isBranchRunning = false
+let isBranchRequested = false
 
 type Row = { key: unknown; label?: unknown; value: unknown }
 
@@ -171,46 +182,74 @@ function savedEffortFor(modelSettings: unknown, model: string, globalEffort: unk
   return typeof globalEffort === 'string' ? globalEffort : ''
 }
 
-// Reading the config is in-memory, so it can be polled often for a quick model/effort switch.
+// Refreshed on the events that change the model or effort, so a switch shows at once.
+async function readConfig($: EngineInterface, currentGeneration: number): Promise<void> {
+  const [rows, sessionModel, globalEffort, modelSettings] = await Promise.all([
+    $.config.list(),
+    $.session.model().catch(() => ''),
+    $.settings.read({ key: 'effortLevel' }).catch(() => undefined),
+    $.settings.read({ key: 'modelSettings' }).catch(() => undefined),
+  ])
+  if (currentGeneration !== generation) return
+  // session.model() is what /model shows (with version); the config row may be a bare alias.
+  const change: Partial<Line> = { configModel: sessionModel || rowValue(rows.find(isModelRow)) }
+  // turn.step supplies the actual effort; only override it with a configured value, never with nothing.
+  // The saved per-model level is what the picker and the app write. A level typed as `/effort <level>`
+  // wins until the saved level changes, since that means another choice was made since.
+  const savedEffort = savedEffortFor(modelSettings, sessionModel || change.configModel || '', globalEffort)
+  const model = sessionModel || change.configModel || ''
+  if (model !== lastConfigModel) {
+    // Another model has its own effort: what the last turn sent for the previous one no longer applies.
+    lastConfigModel = model
+    lastTurnEffort = ''
+  }
+  if (savedEffort !== lastSavedEffort) {
+    // A saved level changed after the last turn: it is the newest choice.
+    lastSavedEffort = savedEffort
+    selectedEffort = ''
+    lastTurnEffort = ''
+  }
+  const configuredEffort = selectedEffort || rowValue(rows.find(isEffortRow)) || lastTurnEffort || savedEffort
+  if (!inTurn && configuredEffort) change.effort = configuredEffort
+  await patch($, change)
+}
+
 async function refreshConfig($: EngineInterface, currentGeneration: number): Promise<void> {
-  if (configPolling === currentGeneration) return
-  configPolling = currentGeneration
+  if (isConfigRunning) {
+    isConfigRequested = true
+    return
+  }
+  isConfigRunning = true
   try {
-    const [rows, sessionModel, globalEffort, modelSettings] = await Promise.all([
-      $.config.list(),
-      $.session.model().catch(() => ''),
-      $.settings.read({ key: 'effortLevel' }).catch(() => undefined),
-      $.settings.read({ key: 'modelSettings' }).catch(() => undefined),
-    ])
-    if (currentGeneration !== generation) return
-    // session.model() is what /model shows (with version); the config row may be a bare alias.
-    const change: Partial<Line> = { configModel: sessionModel || rowValue(rows.find(isModelRow)) }
-    // turn.step supplies the actual effort; only override it with a configured value, never with nothing.
-    // The saved per-model level is what the picker and the app write. A level typed as `/effort <level>`
-    // wins until the saved level changes, since that means another choice was made since.
-    const savedEffort = savedEffortFor(modelSettings, sessionModel || change.configModel || '', globalEffort)
-    if (savedEffort !== lastSavedEffort) {
-      lastSavedEffort = savedEffort
-      selectedEffort = ''
-    }
-    const configuredEffort = selectedEffort || rowValue(rows.find(isEffortRow)) || savedEffort
-    if (!inTurn && configuredEffort) change.effort = configuredEffort
-    await patch($, change)
+    do {
+      isConfigRequested = false
+      await readConfig($, currentGeneration)
+    } while (isConfigRequested)
   } finally {
-    if (configPolling === currentGeneration) configPolling = undefined
+    isConfigRunning = false
   }
 }
 
-// Git spawns a process, so it stays on a slower cadence.
+// Git spawns a process: refreshed when the branch may have moved, not on every tick.
+async function readBranch($: EngineInterface, currentGeneration: number): Promise<void> {
+  const branch = await gitBranch($)
+  if (currentGeneration !== generation) return
+  await patch($, { branch })
+}
+
 async function refreshBranch($: EngineInterface, currentGeneration: number): Promise<void> {
-  if (gitPolling === currentGeneration) return
-  gitPolling = currentGeneration
+  if (isBranchRunning) {
+    isBranchRequested = true
+    return
+  }
+  isBranchRunning = true
   try {
-    const branch = await gitBranch($)
-    if (currentGeneration !== generation) return
-    await patch($, { branch })
+    do {
+      isBranchRequested = false
+      await readBranch($, currentGeneration)
+    } while (isBranchRequested)
   } finally {
-    if (gitPolling === currentGeneration) gitPolling = undefined
+    isBranchRunning = false
   }
 }
 
@@ -257,6 +296,29 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Settings files changed (the effort picker and the app's selector write them).
+  on('classic.ConfigChange', ($, e, next) => {
+    void refreshConfig($, generation).catch(() => {})
+    return next(e)
+  })
+
+  on('classic.PostModelSwitch', ($, e, next) => {
+    inTurn = false
+    void refreshConfig($, generation).catch(() => {})
+    return next(e)
+  })
+
+  on('classic.CwdChanged', ($, e, next) => {
+    void refreshBranch($, generation).catch(() => {})
+    return next(e)
+  })
+
+  // A shell command may have switched branch (git checkout, git switch, git worktree...).
+  on('classic.PostToolUse', ($, e, next) => {
+    if (e.tool_name === 'Bash') void refreshBranch($, generation).catch(() => {})
+    return next(e)
+  })
+
   on('config.set', async ($, e, next) => {
     const result = await next(e)
     if (isModelRow(e) || isEffortRow(e)) {
@@ -270,6 +332,8 @@ export const register: Register = on => {
   on('command.run', { command: ['effort', 'model'] }, async ($, e, next) => {
     const result = await next(e)
     const level = e.args.trim().split(/\s+/)[0] ?? ''
+    // The picker or the argument just made a newer choice than the last turn's effort.
+    if (e.command === 'effort') lastTurnEffort = ''
     if (e.command === 'effort' && LEVELS.test(level)) {
       selectedEffort = level.toLowerCase() === 'auto' ? '' : level.toLowerCase()
       inTurn = false
@@ -282,6 +346,8 @@ export const register: Register = on => {
   on('session.end', ($, e, next) => {
     selectedEffort = ''
     lastSavedEffort = ''
+    lastTurnEffort = ''
+    lastConfigModel = ''
     timers.forEach(timer => timer.cancel())
     timers = []
     generation++ // Ignore metadata requests started in the previous session.
@@ -291,6 +357,7 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (!e.agentId) {
       inTurn = true
+      if (e.effort !== undefined) lastTurnEffort = String(e.effort)
       await patch($, {
         model: e.model ?? '',
         ...(e.effort === undefined ? {} : { effort: String(e.effort) }),
