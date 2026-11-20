@@ -5,6 +5,7 @@ import type { Line } from '../types'
 const COLORS = {
   green: '#5faf5f',
   orange: '#ff8700',
+  yellow: '#d7d75f',
   red: '#ff5f5f',
   cyan: '#5fafd7',
   magenta: '#af87d7',
@@ -51,8 +52,20 @@ function modelLabel({ model, configModel }: Line): string {
     : resolved
 }
 
+// Past 60% it is recommended to hand the work off to a fresh agent: yellow warns before that.
+const CONTEXT_THRESHOLDS = { warn: 45, handoff: 60, critical: 80 } as const
+const BAR_WIDTH = 10
+
 function contextColor(percent: number): string {
-  return percent < 50 ? COLORS.green : percent < 80 ? COLORS.orange : COLORS.red
+  if (percent < CONTEXT_THRESHOLDS.warn) return COLORS.green
+  if (percent < CONTEXT_THRESHOLDS.handoff) return COLORS.yellow
+  if (percent < CONTEXT_THRESHOLDS.critical) return COLORS.orange
+  return COLORS.red
+}
+
+function contextBar(percent: number): { filled: string; empty: string } {
+  const cells = Math.round(Math.min(100, Math.max(0, percent)) / 100 * BAR_WIDTH)
+  return { filled: '█'.repeat(cells), empty: '░'.repeat(BAR_WIDTH - cells) }
 }
 
 // update() retries concurrent writes; returning the old object avoids unnecessary redraws.
@@ -269,7 +282,16 @@ export const register: Register = on => {
     }
     if (branch) add('branch', <Text key="branch" color={COLORS.magenta}>{branch}</Text>)
     if (percent !== null && Number.isFinite(percent)) {
-      add('context', <Text key="context" color={contextColor(percent)}>ctx {Math.round(percent)}%</Text>)
+      const color = contextColor(percent)
+      const bar = contextBar(percent)
+      add('context', (
+        <Text key="context">
+          <Text dimColor>{'context '}</Text>
+          <Text color={color}>{bar.filled}</Text>
+          <Text dimColor>{bar.empty}</Text>
+          <Text color={color}>{` ${Math.round(percent)}%`}</Text>
+        </Text>
+      ))
     }
     if (cost !== null && Number.isFinite(cost)) {
       add('cost', <Text key="cost" dimColor>${cost.toFixed(2)}</Text>)
