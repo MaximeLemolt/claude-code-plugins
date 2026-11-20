@@ -2,6 +2,11 @@
 
 Personal marketplace of Claude Code plugins.
 
+## Plugins
+
+- **session-overview**: a colored row above the terminal prompt with the model, effort, git branch,
+  context and session cost. [Changelog](plugins/session-overview/CHANGELOG.md).
+
 ## Structure
 
 - `.claude-plugin/marketplace.json` — marketplace catalog.
