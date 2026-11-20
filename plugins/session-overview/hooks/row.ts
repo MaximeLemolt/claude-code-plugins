@@ -2,14 +2,17 @@
 import type { PluginOptions } from 'claude-code'
 import type { Line } from '../types'
 
+// Theme keys, not raw colors: the terminal paints each from the theme picked with /theme
+// (dark, light, colorblind-friendly, ANSI, or following the system).
 export const COLORS = {
-  green: '#5faf5f',
-  orange: '#ff8700',
-  yellow: '#d7d75f',
-  amber: '#ffaf00',
-  red: '#ff5f5f',
-  cyan: '#5fafd7',
-  magenta: '#af87d7',
+  model: 'suggestion',
+  branch: 'merged',
+  cost: 'warning',
+  // The context, by how full it is.
+  roomy: 'success',
+  filling: 'warning',
+  handoff: 'claude',
+  critical: 'error',
 } as const
 
 const FAMILY = /(opus|sonnet|haiku|fable)/i
@@ -40,15 +43,15 @@ export function modelLabel({ model, configModel }: Line): string {
     : resolved
 }
 
-// Past 60% it is recommended to hand the work off to a fresh agent: yellow warns before that.
+// Past 60% it is recommended to hand the work off to a fresh agent: the warning color comes before that.
 export const CONTEXT_THRESHOLDS = { warn: 45, handoff: 60, critical: 80 } as const
 export const BAR_WIDTH = 10
 
 export function contextColor(percent: number): string {
-  if (percent < CONTEXT_THRESHOLDS.warn) return COLORS.green
-  if (percent < CONTEXT_THRESHOLDS.handoff) return COLORS.yellow
-  if (percent < CONTEXT_THRESHOLDS.critical) return COLORS.orange
-  return COLORS.red
+  if (percent < CONTEXT_THRESHOLDS.warn) return COLORS.roomy
+  if (percent < CONTEXT_THRESHOLDS.handoff) return COLORS.filling
+  if (percent < CONTEXT_THRESHOLDS.critical) return COLORS.handoff
+  return COLORS.critical
 }
 
 export function contextBar(percent: number): { filled: string; empty: string } {

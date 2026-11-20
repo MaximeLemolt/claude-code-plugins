@@ -456,10 +456,10 @@ export const register: Register = (on, options) => {
     }
 
     if (shown.has('model')) {
-      add('model', <Text key="model" color={COLORS.cyan}>{texts.model}</Text>)
+      add('model', <Text key="model" color={COLORS.model}>{texts.model}</Text>)
       if (shown.has('effort')) parts.push(<Text key="effort" dimColor>{` (${texts.effort})`}</Text>)
     }
-    if (shown.has('branch')) add('branch', <Text key="branch" color={COLORS.magenta}>{branch}</Text>)
+    if (shown.has('branch')) add('branch', <Text key="branch" color={COLORS.branch}>{branch}</Text>)
     if (percent !== null && (shown.has('bar') || shown.has('percent'))) {
       // A stale figure is dimmed rather than colored: its severity is not known any more.
       const color = isStale ? undefined : contextColor(percent)
@@ -483,7 +483,7 @@ export const register: Register = (on, options) => {
         </Text>
       ))
     }
-    if (shown.has('cost')) add('cost', <Text key="cost" color={COLORS.amber}>{texts.cost}</Text>)
+    if (shown.has('cost')) add('cost', <Text key="cost" color={COLORS.cost}>{texts.cost}</Text>)
 
     return <Box>{parts as any}</Box>
   })

@@ -65,6 +65,14 @@ test('the terminal shows the row', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /Opus 5\.5/ }))?.text).toContain('Opus 5.5')
   expect(await ui.find({ type: 'Text', text: /12%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /main/ })).toBeDefined()
+
+  // Each part is painted with a /theme key, so it follows the person's theme.
+  const color = async (text: RegExp) => (await ui.find({ type: 'Text', text }))?.props.color
+  expect(await color(/^█+$/)).toBe('success')
+  expect(await color(/^ ?12%$/)).toBe('success')
+  expect(await color(/^Opus 5\.5$/)).toBe('suggestion')
+  expect(await color(/^main$/)).toBe('merged')
+  expect(await color(/^\$1\.23$/)).toBe('warning')
   await ui.unmount()
 })
 

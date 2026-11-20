@@ -110,10 +110,10 @@ test('tokens are shortened to sit beside the bar', async () => {
 })
 
 test('the context color changes at 45, 60 and 80%', async () => {
-  expect(contextColor(44.9)).toBe(COLORS.green)
-  expect(contextColor(45)).toBe(COLORS.yellow)
-  expect(contextColor(60)).toBe(COLORS.orange)
-  expect(contextColor(80)).toBe(COLORS.red)
+  expect(contextColor(44.9)).toBe(COLORS.roomy)
+  expect(contextColor(45)).toBe(COLORS.filling)
+  expect(contextColor(60)).toBe(COLORS.handoff)
+  expect(contextColor(80)).toBe(COLORS.critical)
 })
 
 test('the context bar has ten cells, clamped to 0 and 100%', async () => {
