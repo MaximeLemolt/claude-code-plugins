@@ -200,6 +200,21 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // `usage().context.percent` only follows the last model response, so it stays stale after
+  // /compact until the next turn. Right after compaction, use the local estimate instead.
+  on('classic.PostCompact', async ($, e, next) => {
+    try {
+      const usage = await $.session.usage({ breakdown: 'summary' })
+      const percentage = usage.context.breakdown?.percentage
+      if (typeof percentage === 'number' && Number.isFinite(percentage)) {
+        await patch($, { percent: Math.min(100, percentage) })
+      }
+    } catch {
+      // Keep the previous value; the next turn corrects it.
+    }
+    return next(e)
+  })
+
   on('config.set', async ($, e, next) => {
     const result = await next(e)
     if (isModelRow(e) || isEffortRow(e)) {

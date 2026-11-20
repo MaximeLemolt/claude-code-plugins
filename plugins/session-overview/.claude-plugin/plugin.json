@@ -1,1 +1,1 @@
-{ "name": "session-overview", "version": "0.3.1", "description": "Colored row above the prompt: model, git branch, context %, session cost.", "types": "./types/index.d.ts" }
+{ "name": "session-overview", "version": "0.3.2", "description": "Colored row above the prompt: model, git branch, context %, session cost.", "types": "./types/index.d.ts" }
