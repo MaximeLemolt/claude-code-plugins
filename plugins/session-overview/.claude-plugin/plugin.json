@@ -1,6 +1,6 @@
 {
   "name": "session-overview",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Colored row above the terminal prompt: model, git branch, context %, session cost. Idle in the desktop app.",
   "types": "./types/index.d.ts",
   "userConfig": {
