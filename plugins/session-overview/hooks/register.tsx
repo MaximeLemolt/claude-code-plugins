@@ -113,6 +113,7 @@ let generation = 0
 let inTurn = false
 // The plugin API exposes no getter for the session's effort, so remember the last /effort choice.
 let selectedEffort = ''
+let lastSavedEffort = ''
 const LEVELS = /^(low|medium|high|xhigh|max|auto)$/i
 
 type Row = { key: unknown; label?: unknown; value: unknown }
@@ -131,24 +132,44 @@ function rowValue(row: Row | undefined): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 }
 
+// The effort a model is saved with: its own `modelSettings` entry (what /effort and the app's
+// selector write) beats the global `effortLevel`. Prefix match covers ids like `claude-sonnet-5-5[1m]`.
+function savedEffortFor(modelSettings: unknown, model: string, globalEffort: unknown): string {
+  const settings = modelSettings && typeof modelSettings === 'object'
+    ? modelSettings as Record<string, { effortLevel?: unknown } | undefined>
+    : {}
+  const id = model.toLowerCase()
+  const key = Object.keys(settings)
+    .filter(name => id === name.toLowerCase() || id.startsWith(`${name.toLowerCase()}[`) || id.startsWith(`${name.toLowerCase()}-`))
+    .sort((a, b) => b.length - a.length)[0]
+  const perModel = key ? settings[key]?.effortLevel : undefined
+  if (typeof perModel === 'string' && perModel) return perModel
+  return typeof globalEffort === 'string' ? globalEffort : ''
+}
+
 // Reading the config is in-memory, so it can be polled often for a quick model/effort switch.
 async function refreshConfig($: EngineInterface, currentGeneration: number): Promise<void> {
   if (configPolling === currentGeneration) return
   configPolling = currentGeneration
   try {
-    const [rows, sessionModel, savedEffort] = await Promise.all([
+    const [rows, sessionModel, globalEffort, modelSettings] = await Promise.all([
       $.config.list(),
       $.session.model().catch(() => ''),
       $.settings.read({ key: 'effortLevel' }).catch(() => undefined),
+      $.settings.read({ key: 'modelSettings' }).catch(() => undefined),
     ])
     if (currentGeneration !== generation) return
     // session.model() is what /model shows (with version); the config row may be a bare alias.
     const change: Partial<Line> = { configModel: sessionModel || rowValue(rows.find(isModelRow)) }
     // turn.step supplies the actual effort; only override it with a configured value, never with nothing.
-    // A level chosen with /effort (session override) wins over the saved/configured one.
-    const configuredEffort = selectedEffort ||
-      rowValue(rows.find(isEffortRow)) ||
-      (typeof savedEffort === 'string' ? savedEffort : '')
+    // The saved per-model level is what the picker and the app write. A level typed as `/effort <level>`
+    // wins until the saved level changes, since that means another choice was made since.
+    const savedEffort = savedEffortFor(modelSettings, sessionModel || change.configModel || '', globalEffort)
+    if (savedEffort !== lastSavedEffort) {
+      lastSavedEffort = savedEffort
+      selectedEffort = ''
+    }
+    const configuredEffort = selectedEffort || rowValue(rows.find(isEffortRow)) || savedEffort
     if (!inTurn && configuredEffort) change.effort = configuredEffort
     await patch($, change)
   } finally {
@@ -239,6 +260,7 @@ export const register: Register = on => {
 
   on('session.end', ($, e, next) => {
     selectedEffort = ''
+    lastSavedEffort = ''
     timers.forEach(timer => timer.cancel())
     timers = []
     generation++ // Ignore metadata requests started in the previous session.
