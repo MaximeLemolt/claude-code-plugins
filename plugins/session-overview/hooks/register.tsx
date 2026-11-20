@@ -6,6 +6,7 @@ const COLORS = {
   green: '#5faf5f',
   orange: '#ff8700',
   yellow: '#d7d75f',
+  amber: '#ffaf00',
   red: '#ff5f5f',
   cyan: '#5fafd7',
   magenta: '#af87d7',
@@ -294,7 +295,7 @@ export const register: Register = on => {
       ))
     }
     if (cost !== null && Number.isFinite(cost)) {
-      add('cost', <Text key="cost" dimColor>${cost.toFixed(2)}</Text>)
+      add('cost', <Text key="cost" color={COLORS.amber}>${cost.toFixed(2)}</Text>)
     }
 
     return <Box>{parts as any}</Box>
