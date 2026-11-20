@@ -165,6 +165,21 @@ async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promi
   }
 }
 
+// Right after /compact the host still reports the pre-compaction figures: look again a few times
+// until the estimate moves, instead of waiting for the next turn.
+async function refreshAfterCompact($: EngineInterface, isCurrent: () => boolean, previous: number | null): Promise<void> {
+  for (const delay of [1_000, 2_000, 4_000, 8_000, 15_000]) {
+    await $.process.run(['sleep', String(delay / 1_000)], { timeoutMs: delay + 2_000 } as any).catch(() => undefined)
+    if (!isCurrent()) return
+    const context = await estimateContext($)
+    if (!isCurrent()) return
+    if (context && context.tokens !== previous) {
+      await patch($, { ...context, isStale: false })
+      return
+    }
+  }
+}
+
 let timers: { cancel(): void }[] = []
 let generation = 0
 let inTurn = false
@@ -329,6 +344,8 @@ export const register: Register = on => {
     figureBeforeCompact = before ? contextKey(before.context) : null
     const context = await estimateContext($)
     if (context) await patch($, { ...context, isStale: false })
+    const currentGeneration = generation
+    void refreshAfterCompact($, () => currentGeneration === generation, context?.tokens ?? null)
     return next(e)
   })
 
