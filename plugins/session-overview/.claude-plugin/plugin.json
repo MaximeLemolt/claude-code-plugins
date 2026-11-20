@@ -1,1 +1,14 @@
-{ "name": "session-overview", "version": "0.3.7", "description": "Colored row above the prompt: model, git branch, context %, session cost.", "types": "./types/index.d.ts" }
+{
+  "name": "session-overview",
+  "version": "0.4.0",
+  "description": "Colored row above the terminal prompt: model, git branch, context %, session cost. Idle in the desktop app.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "showModel": { "type": "boolean", "title": "Show model", "description": "Model name, e.g. Opus 5.5.", "default": true },
+    "showEffort": { "type": "boolean", "title": "Show effort", "description": "Effort level beside the model, e.g. (high).", "default": true },
+    "showBranch": { "type": "boolean", "title": "Show git branch", "description": "Current git branch.", "default": true },
+    "context": { "type": "string", "title": "Context", "description": "both shows the bar and the percentage; bar or percent shows one; off hides the context.", "default": "both", "options": ["both", "bar", "percent", "off"] },
+    "tokens": { "type": "string", "title": "Context tokens", "description": "Tokens and window beside the context, e.g. (64k/1M).", "default": "on", "options": ["on", "off"] },
+    "showCost": { "type": "boolean", "title": "Show cost", "description": "Estimated session cost.", "default": true }
+  }
+}

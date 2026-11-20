@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 import type { Line } from '../types'
 
 const COLORS = {
@@ -76,6 +76,7 @@ function contextBar(percent: number): { filled: string; empty: string } {
 
 // update() retries concurrent writes; returning the old object avoids unnecessary redraws.
 async function patch($: EngineInterface, change: Partial<Line>): Promise<void> {
+  if (!isTerminal) return
   await update($, line, current => {
     const changed = (Object.keys(change) as (keyof Line)[])
       .some(key => current[key] !== change[key])
@@ -145,6 +146,7 @@ function freshContext(context: { percent?: number; tokens?: number }): { percent
 
 // Never replaces a figure with nothing: a missing value keeps the last one shown.
 async function refreshUsage($: EngineInterface, isCurrent: () => boolean): Promise<void> {
+  if (!isTerminal) return
   try {
     const usage = await $.session.usage()
     if (!isCurrent()) return
@@ -181,6 +183,8 @@ async function refreshAfterCompact($: EngineInterface, isCurrent: () => boolean,
 }
 
 let timers: { cancel(): void }[] = []
+// The row is for the terminal only: in the desktop app (no terminal attached) the plugin stays idle.
+let isTerminal = true
 let generation = 0
 let inTurn = false
 // The plugin API exposes no getter for the session's effort, so remember the last /effort choice.
@@ -263,6 +267,7 @@ async function readConfig($: EngineInterface, currentGeneration: number): Promis
 }
 
 async function refreshConfig($: EngineInterface, currentGeneration: number): Promise<void> {
+  if (!isTerminal) return
   if (isConfigRunning) {
     isConfigRequested = true
     return
@@ -286,6 +291,7 @@ async function readBranch($: EngineInterface, currentGeneration: number): Promis
 }
 
 async function refreshBranch($: EngineInterface, currentGeneration: number): Promise<void> {
+  if (!isTerminal) return
   if (isBranchRunning) {
     isBranchRequested = true
     return
@@ -306,8 +312,14 @@ function refreshMetadata($: EngineInterface, currentGeneration: number): void {
   void refreshBranch($, currentGeneration).catch(() => {})
 }
 
+async function hasTerminal($: EngineInterface): Promise<boolean> {
+  return (await $.session.surfaces()).includes('terminal')
+}
+
 function start($: EngineInterface): void {
   timers.forEach(timer => timer.cancel())
+  timers = []
+  if (!isTerminal) return
   const currentGeneration = ++generation
   timers = [
     $.clock.every(CONFIG_POLL_MS, () => void refreshConfig($, currentGeneration).catch(() => {})),
@@ -317,10 +329,38 @@ function start($: EngineInterface): void {
   void refreshUsage($, () => currentGeneration === generation)
 }
 
-export const register: Register = on => {
+// What the person chose to show (plugin.json userConfig); a change reloads the module.
+type Display = {
+  model: boolean
+  effort: boolean
+  branch: boolean
+  context: 'both' | 'bar' | 'percent' | 'off'
+  tokens: 'on' | 'off'
+  cost: boolean
+}
+
+let display: Display = readDisplay({})
+
+function readDisplay(options: PluginOptions): Display {
+  const flag = (key: string) => options[key] !== false
+  const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T): T =>
+    allowed.includes(options[key] as T) ? options[key] as T : fallback
+  return {
+    model: flag('showModel'),
+    effort: flag('showEffort'),
+    branch: flag('showBranch'),
+    context: pick('context', ['both', 'bar', 'percent', 'off'] as const, 'both'),
+    tokens: pick('tokens', ['on', 'off'] as const, 'on'),
+    cost: flag('showCost'),
+  }
+}
+
+export const register: Register = (on, options) => {
+  display = readDisplay(options)
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     inTurn = false
+    isTerminal = await hasTerminal($)
     start($)
     return result
   })
@@ -338,6 +378,7 @@ export const register: Register = on => {
   // `usage().context.percent` only follows the last model response, so it stays stale after
   // /compact until the next turn. Right after compaction, use the local estimate instead.
   on('classic.PostCompact', async ($, e, next) => {
+    if (!isTerminal) return next(e)
     // The last figure predates the compaction: show it as stale until a fresh one replaces it.
     await patch($, { isStale: true })
     const before = await $.session.usage().catch(() => undefined)
@@ -458,13 +499,21 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    // Safety net: if /clear did not deliver a SessionStart event, restart polling on first render.
-    if (!timers.length) start($)
+    if (e.props.hasSurvey || e.surface !== 'terminal') return next(e)
+    // Safety net: a terminal drawing the row means the plugin is wanted, whatever session.start saw;
+    // and if /clear did not deliver a SessionStart event, restart polling on first render.
+    if (!isTerminal || !timers.length) {
+      isTerminal = true
+      start($)
+    }
 
     const state = await read($, line)
-    const model = modelLabel(state)
-    const { branch, effort, percent, isStale, tokens, window, cost } = state
+    const model = display.model ? modelLabel(state) : ''
+    const effort = display.model && display.effort ? state.effort : ''
+    const branch = display.branch ? state.branch : ''
+    const percent = display.context !== 'off' ? state.percent : null
+    const cost = display.cost ? state.cost : null
+    const { isStale, tokens, window } = state
     if (!model && !branch && percent === null && cost === null) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
@@ -483,18 +532,21 @@ export const register: Register = on => {
       // A stale figure is dimmed rather than colored: its severity is not known any more.
       const color = isStale ? undefined : contextColor(percent)
       const bar = contextBar(percent)
+      const showBar = display.context !== 'percent'
+      const showPercent = display.context !== 'bar'
+      const showTokens = display.tokens === 'on' && tokens !== null && window !== null && window > 0
       add('context', (
         <Text key="context">
           <Text dimColor>{'context '}</Text>
-          <Text color={color} dimColor={isStale}>{bar.filled}</Text>
-          <Text dimColor>{bar.empty}</Text>
-          <Text color={color} dimColor={isStale}>{` ${Math.round(percent)}%`}</Text>
-          {tokens !== null && window !== null && window > 0
+          {showBar ? <Text color={color} dimColor={isStale}>{bar.filled}</Text> : null}
+          {showBar ? <Text dimColor>{bar.empty}</Text> : null}
+          {showPercent ? <Text color={color} dimColor={isStale}>{`${showBar ? ' ' : ''}${Math.round(percent)}%`}</Text> : null}
+          {showTokens
             ? (
               <Text>
                 <Text dimColor>{' ('}</Text>
-                <Text color={color} dimColor={isStale}>{formatTokens(tokens)}</Text>
-                <Text dimColor>{`/${formatTokens(window)})`}</Text>
+                <Text color={color} dimColor={isStale}>{formatTokens(tokens!)}</Text>
+                <Text dimColor>{`/${formatTokens(window!)})`}</Text>
               </Text>
             )
             : null}
