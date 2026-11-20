@@ -92,7 +92,7 @@ export type Display = {
   branch: boolean
   context: 'both' | 'bar' | 'percent' | 'off'
   contextLabel: boolean
-  tokens: 'on' | 'off'
+  contextTokens: boolean
   cost: boolean
   // Drawn between the parts, with a space on each side.
   separator: string
@@ -203,7 +203,7 @@ export function readDisplay(options: PluginOptions): Display {
     branch: flag('showBranch'),
     context: pick('context', ['both', 'bar', 'percent', 'off'] as const, 'both'),
     contextLabel: flag('showContextLabel'),
-    tokens: pick('tokens', ['on', 'off'] as const, 'on'),
+    contextTokens: flag('showContextTokens'),
     cost: flag('showCost'),
     separator: readSeparator(options.separator),
     dropOrder: readDropOrder(options.dropOrder),

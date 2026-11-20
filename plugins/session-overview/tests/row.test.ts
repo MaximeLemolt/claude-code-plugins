@@ -144,21 +144,21 @@ test('a typed hide order with a wrong part is refused, saying why', async () => 
 
 test('the display settings default to showing everything', async () => {
   expect(readDisplay({})).toEqual({
-    model: true, effort: true, branch: true, context: 'both', contextLabel: true, tokens: 'on', cost: true,
+    model: true, effort: true, branch: true, context: 'both', contextLabel: true, contextTokens: true, cost: true,
     separator: '|', dropOrder: DEFAULT_DROP_ORDER,
   })
 })
 
 test('the display settings follow /config', async () => {
   expect(readDisplay({
-    showModel: false, showEffort: false, showBranch: false, context: 'bar', showContextLabel: false, tokens: 'off',
+    showModel: false, showEffort: false, showBranch: false, context: 'bar', showContextLabel: false, showContextTokens: false,
     showCost: false, separator: ' • ', dropOrder: 'none',
   })).toEqual({
-    model: false, effort: false, branch: false, context: 'bar', contextLabel: false, tokens: 'off', cost: false,
+    model: false, effort: false, branch: false, context: 'bar', contextLabel: false, contextTokens: false, cost: false,
     separator: '•', dropOrder: [],
   })
   // A value outside the picker keeps the default.
-  expect(readDisplay({ context: 'wide', tokens: 'auto' })).toMatchObject({ context: 'both', tokens: 'on' })
+  expect(readDisplay({ context: 'wide' })).toMatchObject({ context: 'both' })
 })
 
 test('tokens are shortened to sit beside the bar', async () => {

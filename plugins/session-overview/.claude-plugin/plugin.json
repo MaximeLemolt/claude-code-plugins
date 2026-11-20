@@ -1,6 +1,6 @@
 {
   "name": "session-overview",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Colored row above the terminal prompt: model, git branch, context %, session cost. Idle in the desktop app.",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -9,7 +9,7 @@
     "showBranch": { "type": "boolean", "title": "Show git branch", "description": "Current git branch.", "default": true },
     "context": { "type": "string", "title": "Context", "description": "both shows the bar and the percentage; bar or percent shows one; off hides the context.", "default": "both", "options": ["both", "bar", "percent", "off"] },
     "showContextLabel": { "type": "boolean", "title": "Show context label", "description": "The word context before the bar and the percentage.", "default": true },
-    "tokens": { "type": "string", "title": "Context tokens", "description": "Tokens and window beside the context, e.g. (64k/1M).", "default": "on", "options": ["on", "off"] },
+    "showContextTokens": { "type": "boolean", "title": "Show context tokens", "description": "Tokens and window beside the context, e.g. (64k/1M).", "default": true },
     "showCost": { "type": "boolean", "title": "Show cost", "description": "Estimated session cost.", "default": true },
     "separator": { "type": "string", "title": "Separator", "description": "Drawn between the parts, with a space on each side, e.g. | or • or /. Empty restores |.", "default": "|" },
     "dropOrder": { "type": "string", "title": "Hide order", "description": "Possible values: model, effort, git-branch, ctx-label, ctx-bar, ctx-percent, ctx-tokens, cost, in any order and any number, separated by commas or spaces; or none. When the row is wider than the terminal, the listed parts are hidden one by one from left to right until it fits. A part left out is never hidden. A branch still too long is shortened with an ellipsis. The effort shows only beside the model, the context label and tokens only beside the context bar or percentage. none hides nothing; empty restores the default (ctx-tokens, cost, git-branch, ctx-bar, effort).", "default": "ctx-tokens, cost, git-branch, ctx-bar, effort" }

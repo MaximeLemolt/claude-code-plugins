@@ -3,6 +3,13 @@
 All notable changes to the session-overview plugin. Newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.6] - 2026-11-20
+
+### Changed
+
+- The **Context tokens** setting is now an on/off switch named **Show context tokens**, like the
+  other "Show" settings. Its value is not carried over: it starts on.
+
 ## [0.4.5] - 2026-11-20
 
 ### Changed
@@ -143,6 +150,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - First published version: a colored row above the prompt with the model, effort, git branch,
   context percentage and session cost.
 
+[0.4.5]: https://github.com/MaximeLemolt/claude-code-plugins/commit/cfca7ab
 [0.4.4]: https://github.com/MaximeLemolt/claude-code-plugins/commit/704165c
 [0.4.3]: https://github.com/MaximeLemolt/claude-code-plugins/commit/f9384b5
 [0.4.2]: https://github.com/MaximeLemolt/claude-code-plugins/commit/b8f19e5

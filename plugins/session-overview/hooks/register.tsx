@@ -451,7 +451,7 @@ export const register: Register = (on, options) => {
       'ctx-label': percent !== null && display.contextLabel ? 'context' : '',
       'ctx-bar': percent !== null && display.context !== 'percent' ? 'bar' : '',
       'ctx-percent': percent !== null && display.context !== 'bar' ? `${Math.round(percent)}%` : '',
-      'ctx-tokens': percent !== null && display.tokens === 'on' && tokens !== null && window !== null && window > 0
+      'ctx-tokens': percent !== null && display.contextTokens && tokens !== null && window !== null && window > 0
         ? `${formatTokens(tokens)}/${formatTokens(window)}`
         : '',
       cost: display.cost && isPercent(state.cost) ? `$${state.cost.toFixed(2)}` : '',

@@ -76,7 +76,7 @@ Open `/config` in a session and scroll to the **session-overview** rows. A chang
 | Show git branch | on / off | on | Shows the current branch. |
 | Context | `both`, `bar`, `percent`, `off` | `both` | Shows the context as a bar and a percentage, one of them, or not at all. |
 | Show context label | on / off | on | Shows the word `context` before the bar. |
-| Context tokens | `on`, `off` | `on` | Shows the tokens used and the window, e.g. `(84k/200k)`. |
+| Show context tokens | on / off | on | Shows the tokens used and the window, e.g. `(84k/200k)`. |
 | Show cost | on / off | on | Shows the estimated session cost. |
 | Separator | any text | `\|` | Drawn between the parts, with a space on each side, e.g. `•` or `/`. Empty restores `\|`. |
 | Hide order | a list of parts, or `none` | `ctx-tokens, cost, git-branch, ctx-bar, effort` | Which parts to hide first when the terminal is too narrow. See below. |
@@ -88,7 +88,7 @@ Opus 5.5 | 42%
 ```
 
 is **Show effort** off, **Show git branch** off, **Context** `percent`, **Show context label** off,
-**Context tokens** `off` and **Show cost** off.
+**Show context tokens** off and **Show cost** off.
 
 ## Narrow terminals: the hide order
 
