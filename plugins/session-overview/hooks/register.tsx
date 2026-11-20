@@ -337,6 +337,56 @@ type Display = {
   context: 'both' | 'bar' | 'percent' | 'off'
   tokens: 'on' | 'off'
   cost: boolean
+  // Parts removed one by one, in this order, while the row is wider than the terminal.
+  dropOrder: readonly Part[]
+}
+
+type Part = 'model' | 'effort' | 'branch' | 'bar' | 'percent' | 'tokens' | 'cost'
+const PARTS: readonly Part[] = ['model', 'effort', 'branch', 'bar', 'percent', 'tokens', 'cost']
+const DEFAULT_DROP_ORDER: readonly Part[] = ['tokens', 'cost', 'branch', 'bar', 'effort']
+
+function readDropOrder(value: unknown): readonly Part[] {
+  if (typeof value !== 'string') return DEFAULT_DROP_ORDER
+  if (value === 'none') return []
+  const parts = value.split(/[\s,]+/).map(part => part.toLowerCase())
+    .filter((part, index, all): part is Part => PARTS.includes(part as Part) && all.indexOf(part) === index)
+  return parts.length ? parts : DEFAULT_DROP_ORDER
+}
+
+// The text of each part the settings and the state allow, '' for a part with nothing to show.
+type Texts = Record<Part, string>
+
+// Width of the row in cells, as the render below lays it out (every character is one cell wide).
+function rowWidth(texts: Texts, shown: ReadonlySet<Part>): number {
+  const has = (part: Part) => shown.has(part) && texts[part] !== ''
+  const segments: number[] = []
+  if (has('model')) segments.push(texts.model.length + (has('effort') ? ` (${texts.effort})`.length : 0))
+  if (has('branch')) segments.push(texts.branch.length)
+  if (has('bar') || has('percent')) {
+    segments.push('context '.length +
+      (has('bar') ? BAR_WIDTH : 0) +
+      (has('percent') ? (has('bar') ? 1 : 0) + texts.percent.length : 0) +
+      (has('tokens') ? ` (${texts.tokens})`.length : 0))
+  }
+  if (has('cost')) segments.push(texts.cost.length)
+  return segments.reduce((sum, width) => sum + width, 0) + ' | '.length * Math.max(0, segments.length - 1)
+}
+
+// Drops parts in the chosen order until the row fits, then shortens the branch if it still does not.
+function fitRow(texts: Texts, columns: number, dropOrder: readonly Part[]): { shown: Set<Part>; branch: string } {
+  const shown = new Set(PARTS.filter(part => texts[part] !== ''))
+  for (const part of dropOrder) {
+    if (rowWidth(texts, shown) <= columns) break
+    shown.delete(part)
+  }
+  let branch = texts.branch
+  const overflow = rowWidth(texts, shown) - columns
+  if (overflow > 0 && shown.has('branch')) {
+    const keep = branch.length - overflow - 1
+    if (keep >= 1) branch = `${branch.slice(0, keep)}…`
+    else shown.delete('branch')
+  }
+  return { shown, branch }
 }
 
 let display: Display = readDisplay({})
@@ -352,6 +402,7 @@ function readDisplay(options: PluginOptions): Display {
     context: pick('context', ['both', 'bar', 'percent', 'off'] as const, 'both'),
     tokens: pick('tokens', ['on', 'off'] as const, 'on'),
     cost: flag('showCost'),
+    dropOrder: readDropOrder(options.dropOrder),
   }
 }
 
@@ -508,13 +559,23 @@ export const register: Register = (on, options) => {
     }
 
     const state = await read($, line)
-    const model = display.model ? modelLabel(state) : ''
-    const effort = display.model && display.effort ? state.effort : ''
-    const branch = display.branch ? state.branch : ''
-    const percent = display.context !== 'off' ? state.percent : null
-    const cost = display.cost ? state.cost : null
     const { isStale, tokens, window } = state
-    if (!model && !branch && percent === null && cost === null) return next(e)
+    const percent = display.context !== 'off' && isPercent(state.percent) ? state.percent : null
+    const model = display.model ? modelLabel(state) : ''
+    const texts: Texts = {
+      model,
+      effort: model && display.effort ? state.effort : '',
+      branch: display.branch ? state.branch : '',
+      bar: percent !== null && display.context !== 'percent' ? 'bar' : '',
+      percent: percent !== null && display.context !== 'bar' ? `${Math.round(percent)}%` : '',
+      tokens: percent !== null && display.tokens === 'on' && tokens !== null && window !== null && window > 0
+        ? `${formatTokens(tokens)}/${formatTokens(window)}`
+        : '',
+      cost: display.cost && isPercent(state.cost) ? `$${state.cost.toFixed(2)}` : '',
+    }
+    const columns = isPercent(e.props.bodyColumns) ? e.props.bodyColumns : Infinity
+    const { shown, branch } = fitRow(texts, columns, display.dropOrder)
+    if (!shown.size) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const parts: unknown[] = []
@@ -523,25 +584,23 @@ export const register: Register = (on, options) => {
       parts.push(part)
     }
 
-    if (model) {
-      add('model', <Text key="model" color={COLORS.cyan}>{model}</Text>)
-      if (effort) parts.push(<Text key="effort" dimColor>{` (${effort})`}</Text>)
+    if (shown.has('model')) {
+      add('model', <Text key="model" color={COLORS.cyan}>{texts.model}</Text>)
+      if (shown.has('effort')) parts.push(<Text key="effort" dimColor>{` (${texts.effort})`}</Text>)
     }
-    if (branch) add('branch', <Text key="branch" color={COLORS.magenta}>{branch}</Text>)
-    if (percent !== null && Number.isFinite(percent)) {
+    if (shown.has('branch')) add('branch', <Text key="branch" color={COLORS.magenta}>{branch}</Text>)
+    if (percent !== null && (shown.has('bar') || shown.has('percent'))) {
       // A stale figure is dimmed rather than colored: its severity is not known any more.
       const color = isStale ? undefined : contextColor(percent)
       const bar = contextBar(percent)
-      const showBar = display.context !== 'percent'
-      const showPercent = display.context !== 'bar'
-      const showTokens = display.tokens === 'on' && tokens !== null && window !== null && window > 0
+      const showBar = shown.has('bar')
       add('context', (
         <Text key="context">
           <Text dimColor>{'context '}</Text>
           {showBar ? <Text color={color} dimColor={isStale}>{bar.filled}</Text> : null}
           {showBar ? <Text dimColor>{bar.empty}</Text> : null}
-          {showPercent ? <Text color={color} dimColor={isStale}>{`${showBar ? ' ' : ''}${Math.round(percent)}%`}</Text> : null}
-          {showTokens
+          {shown.has('percent') ? <Text color={color} dimColor={isStale}>{`${showBar ? ' ' : ''}${texts.percent}`}</Text> : null}
+          {shown.has('tokens')
             ? (
               <Text>
                 <Text dimColor>{' ('}</Text>
@@ -553,9 +612,7 @@ export const register: Register = (on, options) => {
         </Text>
       ))
     }
-    if (cost !== null && Number.isFinite(cost)) {
-      add('cost', <Text key="cost" color={COLORS.amber}>${cost.toFixed(2)}</Text>)
-    }
+    if (shown.has('cost')) add('cost', <Text key="cost" color={COLORS.amber}>{texts.cost}</Text>)
 
     return <Box>{parts as any}</Box>
   })
