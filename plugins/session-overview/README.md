@@ -26,7 +26,7 @@ Opus 5.5 (high) | develop | context ████░░░░░░ 42% (84k/200k
 |---|---|---|
 | Model | `Opus 5.5` | The model of the session, as `/model` shows it. |
 | Effort | `(high)` | The effort level, beside the model. It follows `/effort` and the level saved for each model. |
-| Git branch | `develop` | The branch of the folder the session works in, or the short commit when no branch is checked out. Nothing outside a git repository. |
+| Git branch | `develop` | The branch of the folder the session works in, or the short commit when no branch is checked out. In a git worktree, the branch checked out in that worktree. Nothing outside a git repository. |
 | Context label | `context` | The word before the bar. |
 | Context bar | `████░░░░░░` | How full the context window is, in ten cells. |
 | Context percentage | `42%` | The same, as a number. |

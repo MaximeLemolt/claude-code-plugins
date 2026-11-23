@@ -9,6 +9,9 @@ type World = {
   estimate: { percentage: number; totalTokens: number }
   // How many times the plugin read the usage or ran git.
   reads?: number
+  // The directory session.cwd() answers, and the branch git finds checked out in each one.
+  cwd?: string
+  branches?: Record<string, string>
   // Makes the settings slow to read, as in a real session: waits on the mocked clock.
   slowConfig?: { sleep: (ms: number) => Promise<void> }
 }
@@ -17,7 +20,7 @@ function engine(on: On, world: World): void {
   world.reads = 0
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.surfaces', () => ({ value: world.surfaces as any }))
-  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.cwd', () => ({ value: world.cwd ?? '/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   // A partial usage: only the fields the plugin reads.
   on('session.usage', (_, e) => (world.reads!++, {
@@ -35,10 +38,16 @@ function engine(on: On, world: World): void {
     return { value: [] }
   })
   on('settings.read', () => ({ value: {} }))
-  on('process.run', () => (world.reads!++, {
-    value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  }))
+  on('process.run', (_, e) => {
+    world.reads!++
+    // `git -C <dir> ...`: each worktree has its own checked-out branch.
+    const dir = e.argv[2] ?? ''
+    const stdout = `${world.branches?.[dir] ?? 'main'}\n`
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('command.run', () => ({ text: '' }))
+  on('classic.PostToolUse', () => ({}))
+  on('classic.CwdChanged', () => ({}))
 }
 
 const BAND = {
@@ -172,5 +181,55 @@ test('the context label follows its setting', { options: { showContextLabel: fal
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
   expect(await ui.find({ type: 'Text', text: /12%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^context $/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+// The main working tree is on develop; the session works in a linked worktree, and a subagent in another.
+const WORKTREES: World = {
+  surfaces: ['terminal'],
+  context: { percent: 12, tokens: 120_000 },
+  estimate: { percentage: 12, totalTokens: 120_000 },
+  cwd: '/orca/workspaces/repo/MER-485',
+  branches: {
+    '/src/repo': 'develop',
+    '/orca/workspaces/repo/MER-485': 'MER-587-logs',
+    '/src/repo/.claude/worktrees/agent-1': 'worktree-agent-1',
+  },
+}
+
+test('in a linked worktree the row shows the branch checked out there', async ($, on) => {
+  mock.clock(on)
+  engine(on, { ...WORKTREES })
+  await $.session.start({ cwd: '/orca/workspaces/repo/MER-485', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect((await ui.find({ type: 'Text', text: /^MER-587-logs$/ }))?.props.color).toBe('merged')
+  expect(await ui.find({ type: 'Text', text: /develop/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test("a subagent's shell command leaves the session's branch on the row", async ($, on) => {
+  const clock = mock.clock(on)
+  const world: World = { ...WORKTREES }
+  engine(on, world)
+  await $.session.start({ cwd: '/orca/workspaces/repo/MER-485', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await ui.find({ type: 'Text', text: /^MER-587-logs$/ })).toBeDefined()
+
+  // In a subagent's hook, session.cwd() answers the subagent's own directory: its worktree.
+  world.cwd = '/src/repo/.claude/worktrees/agent-1'
+  const bash = { tool_name: 'Bash', tool_input: { command: 'git status' }, tool_response: {}, tool_use_id: 't1' }
+  await $.classic.PostToolUse({ ...bash, agent_id: 'agent-1', agent_type: 'general-purpose' } as any)
+  await $.classic.CwdChanged({ old_cwd: '/src/repo', new_cwd: world.cwd, agent_id: 'agent-1' } as any)
+  await clock.advance(1_000)
+  expect(await ui.find({ type: 'Text', text: /^MER-587-logs$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /agent-1/ })).toBeUndefined()
+
+  // The session's own shell command still refreshes the branch.
+  world.cwd = '/orca/workspaces/repo/MER-485'
+  world.branches!['/orca/workspaces/repo/MER-485'] = 'MER-600-next'
+  await $.classic.PostToolUse(bash as any)
+  await clock.advance(1_000)
+  expect(await ui.find({ type: 'Text', text: /^MER-600-next$/ })).toBeDefined()
   await ui.unmount()
 })

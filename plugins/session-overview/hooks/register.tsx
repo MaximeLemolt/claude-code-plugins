@@ -333,14 +333,15 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A subagent's hook reads its own directory, maybe another worktree: the row shows the session's.
   on('classic.CwdChanged', ($, e, next) => {
-    void refreshBranch($, generation).catch(() => {})
+    if (!e.agent_id) void refreshBranch($, generation).catch(() => {})
     return next(e)
   })
 
   // A shell command may have switched branch (git checkout, git switch, git worktree...).
   on('classic.PostToolUse', ($, e, next) => {
-    if (e.tool_name === 'Bash') void refreshBranch($, generation).catch(() => {})
+    if (e.tool_name === 'Bash' && !e.agent_id) void refreshBranch($, generation).catch(() => {})
     return next(e)
   })
 

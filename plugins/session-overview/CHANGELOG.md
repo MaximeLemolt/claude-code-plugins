@@ -3,6 +3,15 @@
 All notable changes to the session-overview plugin. Newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.7] - 2026-11-23
+
+### Fixed
+
+- In a session that works in a git worktree (Orca, `git worktree add`, Claude Code), the branch could
+  be replaced by another worktree's: a subagent's shell command or change of folder read the branch
+  of the subagent's own folder, until the next refresh 30 seconds later. Only the session's own
+  commands refresh the branch now, so the row keeps the branch of the worktree the session works in.
+
 ## [0.4.6] - 2026-11-20
 
 ### Changed
@@ -150,6 +159,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - First published version: a colored row above the prompt with the model, effort, git branch,
   context percentage and session cost.
 
+[0.4.6]: https://github.com/MaximeLemolt/claude-code-plugins/commit/31677cd
 [0.4.5]: https://github.com/MaximeLemolt/claude-code-plugins/commit/cfca7ab
 [0.4.4]: https://github.com/MaximeLemolt/claude-code-plugins/commit/704165c
 [0.4.3]: https://github.com/MaximeLemolt/claude-code-plugins/commit/f9384b5
